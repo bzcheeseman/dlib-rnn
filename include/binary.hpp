@@ -114,7 +114,7 @@ inline binary_tensor<N, NR, 1> operator,(binary_tensor<N, NR, NC> &first, binary
         col_other[k] = other(i,k,0);
       }
       row_me ^= col_other; //multiply the row/col (-1*-1 = 1, 1*-1 = -1, etc.)
-      col_new[j] = (~row_me).count();
+      col_new[j] = (~row_me).count()%2; //counts the number of 1's and mod2 to binarize
       out(i,j,0) = col_new[j]; //set output value = thing just calculated
     }
   }
