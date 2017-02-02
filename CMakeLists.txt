@@ -11,6 +11,8 @@ add_definitions(-DDLIB_USE_CUDA)
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -flto=8 -march=native -mtune=native -O3")
 
+include_directories("/usr/local/include/eigen3")
+
 #include(cmake_utils/add_global_compiler_switch.cmake)
 #
 #macro (toggle_preprocessor_switch option_name)
@@ -71,9 +73,11 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -flto=8 -march=native -mtune=native -O3"
 
 set(SOURCE_FILES ${SOURCE_FILES}
 #        include/cudnn_rnn.hpp
-        include/rnn.h
-        include/input_one_hot.h
-        main.cpp)
+#        include/rnn.h
+#        include/input_one_hot.h
+#        main.cpp
+        include/binary.hpp
+        main2.cpp)
 
 add_executable(dlib_rnn ${SOURCE_FILES})
 
