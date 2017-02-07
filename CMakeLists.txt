@@ -1,15 +1,15 @@
 cmake_minimum_required(VERSION 3.7)
 project(dlib_rnn)
 
-set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 11)
 
-set(CMAKE_CXX_COMPILER /usr/local/bin/g++-6)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
 
 set(USE_CUDA ON)
 set(COMPILER_CAN_DO_CPP_11 1)
 add_definitions(-DDLIB_USE_CUDA)
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -flto=8 -march=native -mtune=native -O3")
+#set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -flto=8 -march=native -mtune=native -O3")
 
 include_directories("/usr/local/include/eigen3")
 
@@ -24,7 +24,7 @@ include_directories("/usr/local/include/eigen3")
 #endmacro()
 #
 #if (USE_CUDA)
-#    find_package(CUDA 7.5)
+    find_package(CUDA 7.5)
 #
 #    if (CUDA_FOUND AND MSVC AND NOT CUDA_CUBLAS_LIBRARIES AND "${CMAKE_SIZEOF_VOID_P}" EQUAL "4")
 #        message(WARNING "You have CUDA installed, but we can't use it unless you put visual studio in 64bit mode.")

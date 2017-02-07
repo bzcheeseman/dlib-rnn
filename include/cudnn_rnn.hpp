@@ -237,9 +237,9 @@ namespace dlib {
     CHECK_CUDA(cudaMallocManaged(&training_reserve, training_reserve_size * sizeof(float)));
   }
 
-//Assumes that we are going to use CUDNN
+//Assumes that we are going to use CUDNN - also instead of doing all this shit just do different classes for different RNN types...
   template<
-        rnn_mode_t rnn_mode,
+        rnn_mode_t rnn_mode, //->change this so that there's like an rnn_ class (relu or tanh), lstm_ class, gru_ class...
         direction_mode_t rnn_direction,
         int seq_length,      //Number of sequences to unroll over
         int rnn_hidden_size, //hidden state size - number of tensors - also fucks everything up if it's larer than 1...

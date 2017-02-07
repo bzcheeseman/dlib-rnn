@@ -25,35 +25,16 @@
 
 #include "include/binary.hpp"
 
+using net_type = dlib::binary_conv<32,2,2,1,1, dlib::input<dlib::matrix<unsigned char>>>;
+
 int main(int argc, char *argv[]){
+  net_type net;
 
-  gru<3,3> gru1;
+  dlib::matrix<unsigned char, 2, 2> sample;
+  sample = 2,2,1,1;
 
-  std::cout << binary_tensor<2,4,4>().size() << " " << Eigen::TensorFixedSize<bool, Eigen::Sizes<2,4,4>>().size() << std::endl;
+  net(sample);
 
-  binary_tensor<1,2,2> me;
-  me(0,0,0) = true;
-  me(0,0,1) = false;
-  me(0,1,0) = false;
-  me(0,1,1) = true;
-//  for (int i = 0; i < 2; i++){
-//    for (int j = 0; j < 2; j++){
-//      for (int k = 0; k < 2; k++){
-//        me(i,j,k) = true;
-//      }
-//    }
-//  }
-  binary_tensor<1,2,1> mult;
-  mult(0,0,0) = true;
-  mult(0,1,0) = false;
-//  mult(1,0,0) = true;
-//  mult(1,1,0) = false;
-
-  auto out = (me,mult);
-
-//  auto out = gru1.forward(mult);
-  std::cout << out(0,0,0) << " " << out(0,1,0) << std::endl;
-  std::cout << out.n() << " " << out.nr() << " " << out.nc() << std::endl;
 
   return 0;
 }
