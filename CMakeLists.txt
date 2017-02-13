@@ -72,14 +72,14 @@ include_directories("/usr/local/include/eigen3")
 #endif()
 
 set(SOURCE_FILES ${SOURCE_FILES}
-#        include/cudnn_rnn.hpp
+        include/cudnn_rnn.hpp
 #        include/rnn.h
 #        include/input_one_hot.h
 #        main.cpp
         include/binary.hpp
-        main2.cpp)
+        main2.cpp include/ntm.hpp)
 
-add_executable(dlib_rnn ${SOURCE_FILES})
+cuda_add_executable(dlib_rnn ${SOURCE_FILES})
 
 #add_executable(dlib_rnn ${SOURCE_FILES})
-target_link_libraries(dlib_rnn dlib)
+target_link_libraries(dlib_rnn /usr/local/cuda/lib/libcudnn.dylib /usr/local/cuda/lib/libcurand.dylib dlib)

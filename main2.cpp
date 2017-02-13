@@ -23,17 +23,23 @@
 
 #include <iostream>
 
-#include "include/binary.hpp"
+//#include "include/ntm.hpp"
+//#include "include/binary.hpp"
+#include "include/cudnn_rnn.hpp"
+#include <dlib/dnn.h>
 
-using net_type = dlib::binary_conv<32,2,2,1,1, dlib::input<dlib::matrix<unsigned char>>>;
+using namespace dlib;
+using net_type = rnn<RNN_RELU, UNIDIRECTIONAL, 20, 10, 512, input<matrix<unsigned char>>>;
 
 int main(int argc, char *argv[]){
   net_type net;
 
-  dlib::matrix<unsigned char, 2, 2> sample;
-  sample = 2,2,1,1;
+  dlib::matrix<unsigned char, 2, 1> sample;
+  sample = 2,2;
 
   net(sample);
+
+//  ntm_<dlib::con<32,3,3,1,1,dlib::input<dlib::matrix<unsigned char>>>, 1,1> ntm;
 
 
   return 0;
