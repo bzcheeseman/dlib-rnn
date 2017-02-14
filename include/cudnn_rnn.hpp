@@ -115,21 +115,21 @@ namespace dlib {
           direction_mode_t rnn_direction,
           int seq_length,      //Number of sequences to unroll over (roughly = num_inputs+num_outputs afaik)
           int rnn_hidden_size, //hidden state size - number of tensors - also fucks everything up if it's larer than 1...
-          int rnn_num_layers,  //number of layers deep (at any time)
-          int num_inputs,  //This is a number of tensors
-          int num_outputs  //This is a number of tensors
+          int rnn_num_layers  //number of layers deep (at any time)
           >
   class rnn_{
 
   private:
     dlib::resizable_tensor hx, hy;
+    cudnnTensorDescriptor_t hx_desc;
+    cudnnTensorDescriptor_t hy_desc;
 
     dlib::resizable_tensor w;
     cudnnFilterDescriptor_t wDesc;
 
-    std::vector<dlib::resizable_tensor> x;
+//    std::vector<dlib::resizable_tensor> x;
     std::vector<cudnnTensorDescriptor_t> xDescs;
-    std::vector<dlib::resizable_tensor> y;
+//    std::vector<dlib::resizable_tensor> y;
     std::vector<cudnnTensorDescriptor_t> yDescs;
 
     float *workspace;
@@ -144,11 +144,6 @@ namespace dlib {
 
   public:
     rnn_(){
-      x.reserve(num_inputs);
-      xDescs.reserve(num_inputs);
-      y.reserve(num_outputs);
-      yDescs.reserve(num_outputs);
-
       workspace_size = 0;
       training_reserve_size = 0;
     }
@@ -156,7 +151,7 @@ namespace dlib {
     template<typename SUBNET> //need potentially multiple subnets?
     void setup(const SUBNET &sub){
 
-      DLIB_CASSERT(seq_length >= num_inputs + num_outputs, "Need seq_length >= num_inputs + num_outputs!");
+//      DLIB_CASSERT(seq_length >= num_inputs + num_outputs, "Need seq_length >= num_inputs + num_outputs!");
 
       CHECK_CUDNN(cudnnCreate(&cudnn_handle));
 
@@ -170,6 +165,28 @@ namespace dlib {
 
       CHECK_CUDNN(cudnnCreateRNNDescriptor(&rnn_desc));
 
+      DLIB_CASSERT(sub.get_output().k() == 1 && sub.get_output().nc() == 1, "Only column vectors!");
+
+      int dims_x[3] = {(int)sub.get_output().num_samples(), (int)sub.get_output().nr(), 1};
+//      int stride_x[3] = {1,1,1};
+      int stride_x[3] = {dims_x[2]*dims_x[1], dims_x[2], 1};
+      cudnnTensorDescriptor_t x_desc;
+      CHECK_CUDNN(cudnnCreateTensorDescriptor(&x_desc));
+      CHECK_CUDNN(cudnnSetTensorNdDescriptor(x_desc, CUDNN_DATA_FLOAT, 3, dims_x, stride_x));
+      for (int i = 0; i < seq_length; i++){
+        xDescs.push_back(x_desc);
+      }
+
+      int dims_y[3] = {(int)sub.get_output().num_samples(), (int)rnn_hidden_size*(1+(int)(rnn_direction == BIDIRECTIONAL)), 1};
+//      int stride_y[3] = {1,1,1};
+      int stride_y[3] = {dims_y[2]*dims_y[1], dims_y[2], 1};
+      cudnnTensorDescriptor_t y_desc;
+      CHECK_CUDNN(cudnnCreateTensorDescriptor(&y_desc));
+      CHECK_CUDNN(cudnnSetTensorNdDescriptor(y_desc, CUDNN_DATA_FLOAT, 3, dims_y, stride_y));
+      for (int i = 0; i < seq_length; i++){
+        yDescs.push_back(y_desc);
+      }
+
       cudnnRNNMode_t mde;
       cudnnDirectionMode_t dir;
 
@@ -182,18 +199,30 @@ namespace dlib {
           break;
       }
 
+      int direction;
       switch (rnn_direction) {
         case UNIDIRECTIONAL:
           dir = CUDNN_UNIDIRECTIONAL;
-          hx.set_size(rnn_num_layers, x[0].k(), rnn_hidden_size, x[0].nr()); //check the last parameter, it might be wrong
-          hy.set_size(rnn_num_layers, x[0].k(), rnn_hidden_size, x[0].nr());
+          direction = 1;
           break;
         case BIDIRECTIONAL:
           dir = CUDNN_BIDIRECTIONAL;
-          hx.set_size(rnn_num_layers, x[0].k(), 2*rnn_hidden_size, x[0].nr());
-          hy.set_size(rnn_num_layers, x[0].k(), 2*rnn_hidden_size, x[0].nr());
+          direction = 2;
           break;
       }
+
+      int dim_h[3] = {rnn_num_layers*direction, dims_x[0] /*minibatch size*/, rnn_hidden_size};
+      int stride_h[3] = {dim_h[2]*dim_h[1], dim_h[2], 1};
+
+      CHECK_CUDNN(cudnnCreateTensorDescriptor(&hx_desc));
+      CHECK_CUDNN(cudnnCreateTensorDescriptor(&hy_desc));
+
+      CHECK_CUDNN(cudnnSetTensorNdDescriptor(hx_desc, CUDNN_DATA_FLOAT, 3, dim_h, stride_h));
+      CHECK_CUDNN(cudnnSetTensorNdDescriptor(hy_desc, CUDNN_DATA_FLOAT, 3, dim_h, stride_h));
+
+      hx.set_size(dim_h[0], dim_h[1], dim_h[2]);
+      hy.set_size(dim_h[0], dim_h[1], dim_h[2]);
+
 
       CHECK_CUDNN(cudnnSetRNNDescriptor(rnn_desc,
                                         rnn_hidden_size,
@@ -204,26 +233,6 @@ namespace dlib {
                                         mde,
                                         CUDNN_DATA_FLOAT));
 
-      DLIB_CASSERT(sub.get_output().k() == 1 && sub.get_output().nc() == 1, "Only column vectors!");
-
-      int dims_x[3] = {(int)sub.get_output().num_samples(), (int)sub.get_output().nr(), 1}; //assert that it's a column vector
-      int stride_x[3] = {dims_x[2]*dims_x[1], dims_x[2], 1};
-      cudnnTensorDescriptor_t x_desc;
-      CHECK_CUDNN(cudnnCreateTensorDescriptor(&x_desc));
-      CHECK_CUDNN(cudnnSetTensorNdDescriptor(x_desc, CUDNN_DATA_FLOAT, 3, dims_x, stride_x));
-      for (int i = 0; i < num_inputs; i++){ //this is messed up I think
-        xDescs.push_back(x_desc);
-      }
-
-      int dims_y[3] = {(int)sub.get_output().num_samples(), (int)rnn_hidden_size*(1+(int)(rnn_direction == BIDIRECTIONAL)), 1};
-      int stride_y[3] = {dims_y[2]*dims_y[1], dims_y[2], 1};
-      cudnnTensorDescriptor_t y_desc;
-      CHECK_CUDNN(cudnnCreateTensorDescriptor(&y_desc));
-      CHECK_CUDNN(cudnnSetTensorNdDescriptor(x_desc, CUDNN_DATA_FLOAT, 3, dims_y, stride_y));
-      for (int i = 0; i < num_outputs; i++){
-        yDescs.push_back(y_desc);
-      }
-
       //Set up workspace - this breaks, either xDescs are bad or rnn_desc is bad. My guess is it's xDescs somehow...? use torch impl
       CHECK_CUDNN(cudnnGetRNNWorkspaceSize(cudnn_handle,
                                            rnn_desc,
@@ -231,7 +240,7 @@ namespace dlib {
                                            xDescs.data(),
                                            &workspace_size));
 
-      CHECK_CUDA(cudaMallocManaged(&workspace, workspace_size));
+      CHECK_CUDA(cudaMallocManaged(&workspace, workspace_size*sizeof(float)));
 
       //Set up training reserve - only do this on the backward pass?
       CHECK_CUDNN(cudnnGetRNNTrainingReserveSize(cudnn_handle,
@@ -257,22 +266,22 @@ namespace dlib {
                                              CUDNN_TENSOR_NCHW,
                                              sizeof(sizes)/sizeof(sizes[0]),
                                              sizes));
+
     }
 
     void forward_inplace(const dlib::tensor &in, dlib::tensor &out) {
-      //implement inplace and just have hx = hy? Need to save memory hardcore. Make sure to store y inside the class too.
       CHECK_CUDNN(cudnnRNNForwardTraining(cudnn_handle,
                                           rnn_desc,
                                           seq_length,
                                           xDescs.data(), in.device(),
-                                          descriptor(hx), hx.device(),
+                                          hx_desc, hx.device(),
                                           NULL, NULL,
                                           wDesc, w.device(),
                                           yDescs.data(), out.device(),
-                                          descriptor(hy), hy.device(),
+                                          hy_desc, hy.device(),
                                           NULL, NULL,
                                           workspace, workspace_size,
-                                          training_reserve, training_reserve_size));
+                                          training_reserve, training_reserve_size)); //execution failed!?!?!?!
 
     }
 
@@ -284,11 +293,9 @@ namespace dlib {
           int seq_length,      //Number of sequences to unroll over
           int rnn_hidden_size, //hidden state size (input/output dimensions don't matter, can have any number of inputs and outputs)
           int rnn_num_layers,   //number of layers deep (at any time)
-//          int num_inputs,
-//          int num_outputs,
           typename SUBNET //learn parameter packs
           >
-  using rnn = add_layer<rnn_<rnn_activation, rnn_direction, seq_length, rnn_hidden_size, rnn_num_layers, 1, 1>, SUBNET>;
+  using rnn = add_layer<rnn_<rnn_activation, rnn_direction, seq_length, rnn_hidden_size, rnn_num_layers>, SUBNET>;
 
 //  template<
 //          direction_mode_t rnn_direction,
