@@ -29,16 +29,18 @@
 #include <dlib/dnn.h>
 
 using namespace dlib;
-using net_type = rnn<RNN_RELU, UNIDIRECTIONAL, 2, 2, 1, input<matrix<unsigned char>>>;
+using net_type = rnn<RNN_TANH, UNIDIRECTIONAL, 1, 2, 5, 1, 1, input<matrix<unsigned char>>>;
 
 int main(int argc, char *argv[]){
   net_type net;
 
-  dlib::matrix<unsigned char, 2, 1> sample;
-  sample = 2,2;
+  dlib::matrix<unsigned char, 5, 2> sample;
+  sample = 2,1,1,2,3,1,5,6,3,4;
+
+  std::cout << sample << std::endl;
 
 
-  net(sample);
+  std::cout << mat(net(sample));
 
 //  ntm_<dlib::con<32,3,3,1,1,dlib::input<dlib::matrix<unsigned char>>>, 1,1> ntm;
 

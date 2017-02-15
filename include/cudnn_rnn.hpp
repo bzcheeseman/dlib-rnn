@@ -114,8 +114,10 @@ namespace dlib {
           rnn_mode_t rnn_activation,
           direction_mode_t rnn_direction,
           int seq_length,      //Number of sequences to unroll over (roughly = num_inputs+num_outputs afaik)
-          int rnn_hidden_size, //hidden state size - number of tensors - also fucks everything up if it's larer than 1...
-          int rnn_num_layers  //number of layers deep (at any time)
+          int rnn_hidden_size, //hidden state size - number of tensors (needs to be comparable to the number of inputs?)
+          int rnn_num_layers,   //number of layers deep (at any time)
+          int num_inputs,
+          int num_outputs
           >
   class rnn_{
 
@@ -165,27 +167,8 @@ namespace dlib {
 
       CHECK_CUDNN(cudnnCreateRNNDescriptor(&rnn_desc));
 
-      DLIB_CASSERT(sub.get_output().k() == 1 && sub.get_output().nc() == 1, "Only column vectors!");
-
-      int dims_x[3] = {(int)sub.get_output().num_samples(), (int)sub.get_output().nr(), 1};
-//      int stride_x[3] = {1,1,1};
-      int stride_x[3] = {dims_x[2]*dims_x[1], dims_x[2], 1};
-      cudnnTensorDescriptor_t x_desc;
-      CHECK_CUDNN(cudnnCreateTensorDescriptor(&x_desc));
-      CHECK_CUDNN(cudnnSetTensorNdDescriptor(x_desc, CUDNN_DATA_FLOAT, 3, dims_x, stride_x));
-      for (int i = 0; i < seq_length; i++){
-        xDescs.push_back(x_desc);
-      }
-
-      int dims_y[3] = {(int)sub.get_output().num_samples(), (int)rnn_hidden_size*(1+(int)(rnn_direction == BIDIRECTIONAL)), 1};
-//      int stride_y[3] = {1,1,1};
-      int stride_y[3] = {dims_y[2]*dims_y[1], dims_y[2], 1};
-      cudnnTensorDescriptor_t y_desc;
-      CHECK_CUDNN(cudnnCreateTensorDescriptor(&y_desc));
-      CHECK_CUDNN(cudnnSetTensorNdDescriptor(y_desc, CUDNN_DATA_FLOAT, 3, dims_y, stride_y));
-      for (int i = 0; i < seq_length; i++){
-        yDescs.push_back(y_desc);
-      }
+      DLIB_CASSERT(sub.get_output().k() == 1, "Only flat matrixes in batches!");
+//      DLIB_CASSERT(seq_length*rnn_hidden_size <= mat(sub.get_output()).size(), "Seems arbitrary but apparently this is necessary?");
 
       cudnnRNNMode_t mde;
       cudnnDirectionMode_t dir;
@@ -211,7 +194,27 @@ namespace dlib {
           break;
       }
 
-      int dim_h[3] = {rnn_num_layers*direction, dims_x[0] /*minibatch size*/, rnn_hidden_size};
+      int dims_x[3] = {(int)sub.get_output().num_samples(), (int)sub.get_output().nr(), 1};
+      int stride_x[3] = {dims_x[2]*dims_x[1], dims_x[2], 1};
+      cudnnTensorDescriptor_t x_desc;
+      CHECK_CUDNN(cudnnCreateTensorDescriptor(&x_desc));
+      CHECK_CUDNN(cudnnSetTensorNdDescriptor(x_desc, CUDNN_DATA_FLOAT, 3, dims_x, stride_x));
+      for (int i = 0; i < num_inputs; i++){
+        xDescs.push_back(x_desc);
+      }
+
+      int dims_y[3] = {(int)sub.get_output().num_samples(), rnn_hidden_size*direction, 1};
+      int stride_y[3] = {dims_y[2]*dims_y[1], dims_y[2], 1};
+      cudnnTensorDescriptor_t y_desc;
+      CHECK_CUDNN(cudnnCreateTensorDescriptor(&y_desc));
+      CHECK_CUDNN(cudnnSetTensorNdDescriptor(y_desc, CUDNN_DATA_FLOAT, 3, dims_y, stride_y));
+      for (int i = 0; i < num_outputs; i++){
+        yDescs.push_back(y_desc);
+      }
+
+      tt::tensor_rand r (time(0));
+
+      int dim_h[3] = {rnn_num_layers*direction, dims_x[0] /*minibatch size*/, rnn_hidden_size}; //debug uni vs bidirectional
       int stride_h[3] = {dim_h[2]*dim_h[1], dim_h[2], 1};
 
       CHECK_CUDNN(cudnnCreateTensorDescriptor(&hx_desc));
@@ -220,8 +223,10 @@ namespace dlib {
       CHECK_CUDNN(cudnnSetTensorNdDescriptor(hx_desc, CUDNN_DATA_FLOAT, 3, dim_h, stride_h));
       CHECK_CUDNN(cudnnSetTensorNdDescriptor(hy_desc, CUDNN_DATA_FLOAT, 3, dim_h, stride_h));
 
-      hx.set_size(dim_h[0], dim_h[1], dim_h[2]);
-      hy.set_size(dim_h[0], dim_h[1], dim_h[2]);
+      hx.set_size(dim_h[0], dim_h[1], dim_h[2]+(rnn_hidden_size%2));
+      hy.set_size(dim_h[0], dim_h[1], dim_h[2]+(rnn_hidden_size%2));
+
+      r.fill_gaussian(hx, 0, 0.1);
 
 
       CHECK_CUDNN(cudnnSetRNNDescriptor(rnn_desc,
@@ -250,8 +255,6 @@ namespace dlib {
                                                  &training_reserve_size));
 
       CHECK_CUDA(cudaMallocManaged(&training_reserve, training_reserve_size));
-
-      tt::tensor_rand r (time(0));
 
       std::size_t params_size;
       CHECK_CUDNN(cudnnGetRNNParamsSize(cudnn_handle, rnn_desc, xDescs[0], &params_size, CUDNN_DATA_FLOAT));
@@ -293,9 +296,11 @@ namespace dlib {
           int seq_length,      //Number of sequences to unroll over
           int rnn_hidden_size, //hidden state size (input/output dimensions don't matter, can have any number of inputs and outputs)
           int rnn_num_layers,   //number of layers deep (at any time)
+          int num_inputs,
+          int num_outputs,
           typename SUBNET //learn parameter packs
           >
-  using rnn = add_layer<rnn_<rnn_activation, rnn_direction, seq_length, rnn_hidden_size, rnn_num_layers>, SUBNET>;
+  using rnn = add_layer<rnn_<rnn_activation, rnn_direction, seq_length, rnn_hidden_size, rnn_num_layers, num_inputs, num_outputs>, SUBNET>;
 
 //  template<
 //          direction_mode_t rnn_direction,
