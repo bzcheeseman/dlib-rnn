@@ -29,18 +29,18 @@
 #include <dlib/dnn.h>
 
 using namespace dlib;
-using net_type = rnn<RNN_TANH, UNIDIRECTIONAL, 1, 2, 5, 1, 1, input<matrix<unsigned char>>>;
+using net_type = rnn<GRU, BIDIRECTIONAL, 1, 10, 5, input<matrix<float>>>;
 
 int main(int argc, char *argv[]){
   net_type net;
 
-  dlib::matrix<unsigned char, 5, 2> sample;
-  sample = 2,1,1,2,3,1,5,6,3,4;
+  dlib::matrix<float, 5, 1> sample;
+  sample = 2,1,1,2,3;
 
-  std::cout << sample << std::endl;
+  dlib::matrix<float> output = mat(net(sample));
+  std::cout << output << std::endl;
 
-
-  std::cout << mat(net(sample));
+  std::cout << mat(net(output)); //this is how you would run predictions for sequences or something!
 
 //  ntm_<dlib::con<32,3,3,1,1,dlib::input<dlib::matrix<unsigned char>>>, 1,1> ntm;
 

@@ -93,16 +93,8 @@ namespace dlib {
     return (const cudnnTensorDescriptor_t) t.get_handle();
   }
 
-//RNNMode_t = CUDNN_LSTM or CUDNN_GRU or CUDNN_RNN_RELU or CUDNN_RNN_TANH
-//direction mode = CUDNN_UNIDIRECTIONAL (front to end only) or CUDNN_BIDIRECTIONAL (separatly front to back and back to front)
-//input mode = CUDNN_LINEAR_INPUT (matrix mult) or CUDNN_SKIP_INPUT (input needs to be the right size for the first layer)
-//dropout descriptor - create with cudnnCreateDropoutDescriptor() and cudnnSetDropoutDescriptor()
-
-//look at dlib cudnn handle stuff
-//think about storing hidden state in memory or just not on the device?
-
   enum rnn_mode_t {
-    RNN_RELU, RNN_TANH
+    RNN_RELU, RNN_TANH, GRU
   };
   enum direction_mode_t {
     UNIDIRECTIONAL, BIDIRECTIONAL
@@ -110,14 +102,13 @@ namespace dlib {
 
 //Assumes that we are going to use CUDNN - also instead of doing all this shit just do different classes for different RNN types...
 
+  //Accepts inputs of dimension (batch_size, seq_length, input_size)
   template<
           rnn_mode_t rnn_activation,
           direction_mode_t rnn_direction,
           int seq_length,      //Number of sequences to unroll over (roughly = num_inputs+num_outputs afaik)
           int rnn_hidden_size, //hidden state size - number of tensors (needs to be comparable to the number of inputs?)
-          int rnn_num_layers,   //number of layers deep (at any time)
-          int num_inputs,
-          int num_outputs
+          int rnn_num_layers  //number of layers deep (at any time)
           >
   class rnn_{
 
@@ -129,9 +120,8 @@ namespace dlib {
     dlib::resizable_tensor w;
     cudnnFilterDescriptor_t wDesc;
 
-//    std::vector<dlib::resizable_tensor> x;
     std::vector<cudnnTensorDescriptor_t> xDescs;
-//    std::vector<dlib::resizable_tensor> y;
+    resizable_tensor y; //for sizing
     std::vector<cudnnTensorDescriptor_t> yDescs;
 
     float *workspace;
@@ -153,7 +143,7 @@ namespace dlib {
     template<typename SUBNET> //need potentially multiple subnets?
     void setup(const SUBNET &sub){
 
-//      DLIB_CASSERT(seq_length >= num_inputs + num_outputs, "Need seq_length >= num_inputs + num_outputs!");
+      DLIB_CASSERT(seq_length == sub.get_output().k(), "Need at least seq_length samples!");
 
       CHECK_CUDNN(cudnnCreate(&cudnn_handle));
 
@@ -167,9 +157,6 @@ namespace dlib {
 
       CHECK_CUDNN(cudnnCreateRNNDescriptor(&rnn_desc));
 
-      DLIB_CASSERT(sub.get_output().k() == 1, "Only flat matrixes in batches!");
-//      DLIB_CASSERT(seq_length*rnn_hidden_size <= mat(sub.get_output()).size(), "Seems arbitrary but apparently this is necessary?");
-
       cudnnRNNMode_t mde;
       cudnnDirectionMode_t dir;
 
@@ -180,16 +167,21 @@ namespace dlib {
         case RNN_TANH:
           mde = CUDNN_RNN_TANH;
           break;
+        case GRU:
+          mde = CUDNN_GRU;
+          break;
       }
 
       int direction;
       switch (rnn_direction) {
         case UNIDIRECTIONAL:
           dir = CUDNN_UNIDIRECTIONAL;
+          //casserts here
           direction = 1;
           break;
         case BIDIRECTIONAL:
           dir = CUDNN_BIDIRECTIONAL;
+          //casserts here
           direction = 2;
           break;
       }
@@ -199,7 +191,7 @@ namespace dlib {
       cudnnTensorDescriptor_t x_desc;
       CHECK_CUDNN(cudnnCreateTensorDescriptor(&x_desc));
       CHECK_CUDNN(cudnnSetTensorNdDescriptor(x_desc, CUDNN_DATA_FLOAT, 3, dims_x, stride_x));
-      for (int i = 0; i < num_inputs; i++){
+      for (int i = 0; i < seq_length; i++){
         xDescs.push_back(x_desc);
       }
 
@@ -208,13 +200,14 @@ namespace dlib {
       cudnnTensorDescriptor_t y_desc;
       CHECK_CUDNN(cudnnCreateTensorDescriptor(&y_desc));
       CHECK_CUDNN(cudnnSetTensorNdDescriptor(y_desc, CUDNN_DATA_FLOAT, 3, dims_y, stride_y));
-      for (int i = 0; i < num_outputs; i++){
+      y.set_size(dims_y[0], dims_y[1], dims_y[2]);
+      for (int i = 0; i < seq_length; i++){
         yDescs.push_back(y_desc);
       }
 
       tt::tensor_rand r (time(0));
 
-      int dim_h[3] = {rnn_num_layers*direction, dims_x[0] /*minibatch size*/, rnn_hidden_size}; //debug uni vs bidirectional
+      int dim_h[3] = {rnn_num_layers*direction, dims_x[0] /*minibatch size*/, rnn_hidden_size};
       int stride_h[3] = {dim_h[2]*dim_h[1], dim_h[2], 1};
 
       CHECK_CUDNN(cudnnCreateTensorDescriptor(&hx_desc));
@@ -258,7 +251,7 @@ namespace dlib {
 
       std::size_t params_size;
       CHECK_CUDNN(cudnnGetRNNParamsSize(cudnn_handle, rnn_desc, xDescs[0], &params_size, CUDNN_DATA_FLOAT));
-      w.set_size(params_size);
+      w.set_size(params_size/sizeof(float));
       r.fill_gaussian(w, 0.0, 0.1);
 
       int sizes[] = {static_cast<int>(params_size), 1, 1};
@@ -272,7 +265,10 @@ namespace dlib {
 
     }
 
-    void forward_inplace(const dlib::tensor &in, dlib::tensor &out) {
+    template<typename SUBNET>
+    void forward(const SUBNET &sub, resizable_tensor &out) {
+      resizable_tensor in = sub.get_output();
+      out.copy_size(y);
       CHECK_CUDNN(cudnnRNNForwardTraining(cudnn_handle,
                                           rnn_desc,
                                           seq_length,
@@ -284,8 +280,18 @@ namespace dlib {
                                           hy_desc, hy.device(),
                                           NULL, NULL,
                                           workspace, workspace_size,
-                                          training_reserve, training_reserve_size)); //execution failed!?!?!?!
+                                          training_reserve, training_reserve_size));
 
+      y = out; //cache the last output for future use
+
+    }
+
+    template<typename SUBNET>
+    void backward_inplace(const tensor& gradient_input,
+                          SUBNET& sub,
+                          tensor& params_grad)
+    {
+      ;
     }
 
   };
@@ -295,24 +301,10 @@ namespace dlib {
           direction_mode_t rnn_direction,
           int seq_length,      //Number of sequences to unroll over
           int rnn_hidden_size, //hidden state size (input/output dimensions don't matter, can have any number of inputs and outputs)
-          int rnn_num_layers,   //number of layers deep (at any time)
-          int num_inputs,
-          int num_outputs,
+          int rnn_num_layers,  //number of layers deep (at any time)
           typename SUBNET //learn parameter packs
           >
-  using rnn = add_layer<rnn_<rnn_activation, rnn_direction, seq_length, rnn_hidden_size, rnn_num_layers, num_inputs, num_outputs>, SUBNET>;
-
-//  template<
-//          direction_mode_t rnn_direction,
-//          int seq_length,      //Number of sequences to unroll over (roughly = num_inputs+num_outputs afaik)
-//          int rnn_hidden_size, //hidden state size - number of tensors - also fucks everything up if it's larer than 1...
-//          int rnn_num_layers,  //number of layers deep (at any time)
-//          int num_inputs = 1,  //This is a number of tensors
-//          int num_outputs = 1  //This is a number of tensors
-//  >
-//  class gru_{
-//
-//  };
+  using rnn = add_layer<rnn_<rnn_activation, rnn_direction, seq_length, rnn_hidden_size, rnn_num_layers>, SUBNET>;
 
 //  template<
 //          direction_mode_t rnn_direction,
