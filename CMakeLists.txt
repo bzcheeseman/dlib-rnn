@@ -2,16 +2,16 @@ cmake_minimum_required(VERSION 3.7)
 project(dlib_rnn)
 
 set(CMAKE_CXX_STANDARD 11)
+#set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
-
-set(USE_CUDA ON)
-set(COMPILER_CAN_DO_CPP_11 1)
-add_definitions(-DDLIB_USE_CUDA)
+#set(USE_CUDA ON)
+#set(COMPILER_CAN_DO_CPP_11 1)
+#add_definitions(-DDLIB_USE_CUDA)
 
 #set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -flto=8 -march=native -mtune=native -O3")
 
 include_directories("/usr/local/include/eigen3")
+#include_directories("/usr/local/include/dlib")
 
 #include(cmake_utils/add_global_compiler_switch.cmake)
 #
@@ -76,8 +76,9 @@ set(SOURCE_FILES ${SOURCE_FILES}
 #        include/rnn.h
 #        include/input_one_hot.h
 #        main.cpp
-        include/binary.hpp
-        main2.cpp include/ntm.hpp)
+#        include/binary.hpp
+#        include/ntm.hpp
+        main2.cpp)
 
 cuda_add_executable(dlib_rnn ${SOURCE_FILES})
 

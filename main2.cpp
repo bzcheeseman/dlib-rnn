@@ -27,22 +27,56 @@
 //#include "include/binary.hpp"
 #include "include/cudnn_rnn.hpp"
 #include <dlib/dnn.h>
+#include <dlib/data_io.h>
 
 using namespace dlib;
-using net_type = rnn<GRU, BIDIRECTIONAL, 1, 10, 5, input<matrix<float>>>;
+using net_type = fc<10,rnn<GRU, BIDIRECTIONAL, 1, 5, 10, input<matrix<float>>>>;
 
 int main(int argc, char *argv[]){
+
+//  std::vector<matrix<unsigned char>> training_images;
+//  std::vector<unsigned long> training_labels;
+//  std::vector<matrix<unsigned char>> testing_images;
+//  std::vector<unsigned long> testing_labels;
+//  load_mnist_dataset("/Users/Aman/Desktop/data/", training_images, training_labels, testing_images, testing_labels);
+
   net_type net;
+//  dnn_trainer<net_type> trainer(net);
+//  trainer.set_learning_rate(0.01);
+//  trainer.set_min_learning_rate(0.00001);
+//  trainer.be_verbose();
 
-  dlib::matrix<float, 5, 1> sample;
-  sample = 2,1,1,2,3;
+//  trainer.set_synchronization_file("test_sync", std::chrono::seconds(20));
+//
+//  std::vector<matrix<unsigned char>> samples;
+//  std::vector<unsigned long> labels;
+//  dlib::rand r(time(0));
+//  while (trainer.get_learning_rate() >= 1e-3){
+//    samples.clear();
+//    labels.clear();
+//
+//    while (samples.size() < 32){
+//      int idx = r.get_random_32bit_number() % training_images.size();
+//      samples.push_back(training_images[idx]);
+//      labels.push_back(training_labels[idx]);
+//    }
+//
+//    trainer.train_one_step(samples, labels);
+//
+//  }
+//
+//  trainer.get_net();
 
-  dlib::matrix<float> output = mat(net(sample));
-  std::cout << output << std::endl;
+  std::vector<dlib::matrix<float,5,2>> samples;
+  dlib::matrix<float,5,2> sample;
+  sample = 1,2,3,4,5,6,7,8,9,1;
+  samples.push_back(sample);
 
-  std::cout << mat(net(output)); //this is how you would run predictions for sequences or something!
 
-//  ntm_<dlib::con<32,3,3,1,1,dlib::input<dlib::matrix<unsigned char>>>, 1,1> ntm;
+  std::cout << mat(net(sample));
+//  std::cout << labels[0];
+
+//  std::cout << net(output,3)
 
 
   return 0;
