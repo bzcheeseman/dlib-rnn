@@ -33,6 +33,7 @@
 #include <dlib/dnn/cuda_utils.h>
 #include <dlib/dnn/cudnn_dlibapi.h>
 #include <dlib/dnn/layers.h>
+#include <dlib/serialize.h>
 
 //cudnn dependencies
 #include <cudnn.h>
@@ -94,6 +95,40 @@ namespace dlib {
     return (const cudnnTensorDescriptor_t) t.get_handle();
   }
 
+  //accepts inputs of size (seq_length*minibatch, nr, nc) (the samples can repeat)
+  template<int seq_length>
+  class input_rnn {
+  public:
+    input_rnn(){}
+
+    typedef matrix<float> input_type;
+
+    template<typename forward_iterator>
+    void to_tensor (
+            forward_iterator ibegin,
+            forward_iterator iend,
+            resizable_tensor& data
+    ) const
+    {
+      long minibatch = std::distance(ibegin,iend)/seq_length;
+      data.set_size(seq_length, minibatch, ibegin->nr(), ibegin->nc());
+
+      for(int n = 0; n < seq_length; n++){
+        for (int k = 0; k < minibatch; k++){
+          for (int nr = 0; nr < ibegin->nr(); nr++){
+            for (int nc = 0; nc < ibegin->nc(); nc++){
+              data.host_write_only()[((n*minibatch + k)*ibegin->nr() + nr)*ibegin->nc() + nc]
+                      = (*(ibegin+(n*minibatch + k)))(nr,nc);
+            }
+          }
+        }
+      }
+
+    }
+
+
+  };
+
   enum rnn_mode_t {
     RNN_RELU, RNN_TANH, GRU
   };
@@ -105,7 +140,6 @@ namespace dlib {
   template<
           rnn_mode_t rnn_activation,
           rnn_direction_t rnn_direction,
-          int seq_length,      //Number of sequences to unroll over (roughly = num_inputs+num_outputs afaik)
           int rnn_hidden_size, //hidden state size - number of tensors (needs to be comparable to the number of inputs?)
           int rnn_num_layers  //number of layers deep (at any time)
   >
@@ -139,6 +173,8 @@ namespace dlib {
     double learning_rate_multiplier;
     double weight_decay_multiplier;
 
+    int seq_length;
+
   public:
     rnn_() {
       workspace_size = 0;
@@ -169,7 +205,8 @@ namespace dlib {
     //need potentially multiple subnets?
     void setup(const SUBNET &sub) {
 
-      DLIB_CASSERT(seq_length == sub.get_output().num_samples(), "Need at least seq_length samples!");
+      //minibatch samples go into each sequence input! That's why we want that one first.
+      seq_length = sub.get_output().num_samples();
 
       CHECK_CUDNN(cudnnCreate(&cudnn_handle));
 
@@ -207,7 +244,7 @@ namespace dlib {
           break;
       }
 
-      int dims_x[3] = {(int) sub.get_output().k(), (int) sub.get_output().nr(), (int) sub.get_output().nc()};
+      int dims_x[3] = {(int) sub.get_output().k() /*minibatch*/, (int) sub.get_output().nr(), (int) sub.get_output().nc()};
       int stride_x[3] = {dims_x[2] * dims_x[1], dims_x[2], 1};
       cudnnTensorDescriptor_t x_desc;
       CHECK_CUDNN(cudnnCreateTensorDescriptor(&x_desc));
@@ -216,7 +253,7 @@ namespace dlib {
         xDescs.push_back(x_desc);
       }
 
-      int dims_y[3] = {(int) sub.get_output().k(), rnn_hidden_size * direction, 1};
+      int dims_y[3] = {(int) sub.get_output().k() /*minibatch*/, rnn_hidden_size * direction, 1};
       int stride_y[3] = {dims_y[2] * dims_y[1], dims_y[2], 1};
       cudnnTensorDescriptor_t y_desc;
       CHECK_CUDNN(cudnnCreateTensorDescriptor(&y_desc));
@@ -294,11 +331,13 @@ namespace dlib {
 
     template<typename SUBNET>
     void forward(const SUBNET &sub, resizable_tensor &out) {
+      //need to do something here to make sure the inputs are correct (or just make a new layer that goes before this one?
+      // Or a function that takes a normal tensor and transposes it?
       out.copy_size(y);
       CHECK_CUDNN(cudnnRNNForwardTraining(cudnn_handle,
                                           rnn_desc,
                                           seq_length,
-                                          xDescs.data(), sub.get_output().device(),
+                                          xDescs.data(), input.device(),
                                           hx_desc, hx.device(),
                                           NULL, NULL,
                                           wDesc, w.device(),
@@ -309,6 +348,8 @@ namespace dlib {
                                           training_reserve, training_reserve_size));
 
       y = out; //cache the last output for future use
+      hx = hy;
+      hy = 0;
 
     }
 
@@ -344,6 +385,11 @@ namespace dlib {
                                             training_reserve, training_reserve_size));
       }
 
+      //clip output dhx to avoid huge gradients
+      tt::threshold(dhx, 5.f); //clip upper
+      tt::threshold(dhx, -5.f); //clip lower
+      dhy = dhx;
+
     }
 
     friend std::ostream &operator<<(std::ostream &out, const rnn_ &item) {
@@ -376,17 +422,44 @@ namespace dlib {
       return out;
     }
 
+    friend void serialize(const rnn_ &item, std::ostream &out){
+      serialize(item.seq_length, out);
+      serialize(item.workspace_size, out);
+      serialize(item.weight_decay_multiplier, out);
+      serialize(item.training_reserve_size, out);
+      serialize(item.w, out);
+      serialize(item.dhx, out);
+      serialize(item.dhy, out);
+      serialize(item.hx, out);
+      serialize(item.hy, out);
+      serialize(item.y, out);
+    }
+
+    friend void deserialize(rnn_ &item, std::istream &in){
+      deserialize(item.seq_length, in);
+      deserialize(item.workspace_size, in);
+      CHECK_CUDA(cudaMallocManaged(&(item.workspace), item.workspace_size * sizeof(float)));
+      deserialize(item.weight_decay_multiplier, in);
+      deserialize(item.training_reserve_size, in);
+      CHECK_CUDA(cudaMallocManaged(&(item.training_reserve), item.training_reserve_size));
+      deserialize(item.w, in);
+      deserialize(item.dhx, in);
+      deserialize(item.dhy, in);
+      deserialize(item.hx, in);
+      deserialize(item.hy, in);
+      deserialize(item.y, in);
+    }
+
   };
 
   template< //use the branching structure for things like inception-net to get more inputs...
           rnn_mode_t rnn_activation,
           rnn_direction_t rnn_direction,
-          int seq_length,      //Number of sequences to unroll over
           int rnn_hidden_size, //hidden state size (input/output dimensions don't matter, can have any number of inputs and outputs)
           int rnn_num_layers,  //number of layers deep (at any time)
           typename SUBNET //learn parameter packs
   >
-  using rnn = add_layer<rnn_<rnn_activation, rnn_direction, seq_length, rnn_hidden_size, rnn_num_layers>, SUBNET>;
+  using rnn = add_layer<rnn_<rnn_activation, rnn_direction, rnn_hidden_size, rnn_num_layers>, SUBNET>;
 
 //  template<
 //          direction_mode_t rnn_direction,
