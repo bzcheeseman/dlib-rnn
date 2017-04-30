@@ -25,6 +25,9 @@
 #ifndef HOMEAUTOMATION_CUDNN_RNN_H_HPP
 #define HOMEAUTOMATION_CUDNN_RNN_H_HPP
 
+#ifndef DLIB_USE_CUDA
+#define DLIB_USE_CUDA
+
 //dlib dependencies
 #include <dlib/dnn.h>
 #include <dlib/dnn/tensor.h>
@@ -98,10 +101,11 @@ namespace dlib {
   //accepts inputs of size (seq_length*minibatch, nr, nc) (the samples can repeat)
   template<int seq_length>
   class input_rnn {
+    int seq_len;
   public:
-    input_rnn(){}
+    input_rnn():seq_len(seq_length) {}
 
-    typedef matrix<float> input_type;
+    typedef matrix<unsigned char> input_type;
 
     template<typename forward_iterator>
     void to_tensor (
@@ -111,14 +115,15 @@ namespace dlib {
     ) const
     {
       long minibatch = std::distance(ibegin,iend)/seq_length;
-      data.set_size(seq_length, minibatch, ibegin->nr(), ibegin->nc());
+      data.set_size(minibatch, seq_length, ibegin->nr(), ibegin->nc());
 
-      for(int n = 0; n < seq_length; n++){
-        for (int k = 0; k < minibatch; k++){
+
+      for(int n = 0; n < minibatch; n++){
+        for (int k = 0; k < seq_length; k++){
           for (int nr = 0; nr < ibegin->nr(); nr++){
             for (int nc = 0; nc < ibegin->nc(); nc++){
-              data.host_write_only()[((n*minibatch + k)*ibegin->nr() + nr)*ibegin->nc() + nc]
-                      = (*(ibegin+(n*minibatch + k)))(nr,nc);
+              data.host_write_only()[((n*seq_length + k)*ibegin->nr() + nr)*ibegin->nc() + nc]
+                      = (*(ibegin+(n*seq_length + k)))(nr,nc);
             }
           }
         }
@@ -126,6 +131,13 @@ namespace dlib {
 
     }
 
+    friend void serialize(const input_rnn &item, std::ostream &out){
+      serialize(item.seq_len, out);
+    }
+
+    friend void deserialize(input_rnn &item, std::istream &in){
+      deserialize(item.seq_len, in);
+    }
 
   };
 
@@ -173,7 +185,19 @@ namespace dlib {
     double learning_rate_multiplier;
     double weight_decay_multiplier;
 
+    int batch_size;
     int seq_length;
+
+    // to swap dimensions (a.k.a. transpose) just set_size(k, n, r, c)
+
+    void transpose_nk(resizable_tensor &data){
+
+      long old_n = data.num_samples();
+      long old_k = data.k();
+
+      data.set_size(old_k, old_n, data.nr(), data.nc());
+
+    }
 
   public:
     rnn_() {
@@ -206,7 +230,8 @@ namespace dlib {
     void setup(const SUBNET &sub) {
 
       //minibatch samples go into each sequence input! That's why we want that one first.
-      seq_length = sub.get_output().num_samples();
+      batch_size = (int)sub.get_output().num_samples();
+      seq_length = (int)sub.get_output().k();
 
       CHECK_CUDNN(cudnnCreate(&cudnn_handle));
 
@@ -244,7 +269,7 @@ namespace dlib {
           break;
       }
 
-      int dims_x[3] = {(int) sub.get_output().k() /*minibatch*/, (int) sub.get_output().nr(), (int) sub.get_output().nc()};
+      int dims_x[3] = {batch_size, (int) sub.get_output().nr(), (int) sub.get_output().nc()};
       int stride_x[3] = {dims_x[2] * dims_x[1], dims_x[2], 1};
       cudnnTensorDescriptor_t x_desc;
       CHECK_CUDNN(cudnnCreateTensorDescriptor(&x_desc));
@@ -253,7 +278,7 @@ namespace dlib {
         xDescs.push_back(x_desc);
       }
 
-      int dims_y[3] = {(int) sub.get_output().k() /*minibatch*/, rnn_hidden_size * direction, 1};
+      int dims_y[3] = {batch_size, rnn_hidden_size * direction, 1};
       int stride_y[3] = {dims_y[2] * dims_y[1], dims_y[2], 1};
       cudnnTensorDescriptor_t y_desc;
       CHECK_CUDNN(cudnnCreateTensorDescriptor(&y_desc));
@@ -265,7 +290,7 @@ namespace dlib {
 
       tt::tensor_rand r(time(0));
 
-      int dim_h[3] = {rnn_num_layers * direction, dims_x[0] /*minibatch size*/, rnn_hidden_size};
+      int dim_h[3] = {rnn_num_layers * direction, batch_size, rnn_hidden_size};
       int stride_h[3] = {dim_h[2] * dim_h[1], dim_h[2], 1};
 
       CHECK_CUDNN(cudnnCreateTensorDescriptor(&hx_desc));
@@ -330,10 +355,11 @@ namespace dlib {
     }
 
     template<typename SUBNET>
-    void forward(const SUBNET &sub, resizable_tensor &out) {
-      //need to do something here to make sure the inputs are correct (or just make a new layer that goes before this one?
-      // Or a function that takes a normal tensor and transposes it?
-      out.copy_size(y);
+    void forward(const SUBNET &sub, resizable_tensor &out) {  // This should work, need to check when cuda works again
+
+      resizable_tensor &input = sub.get_output(); //rename the input to the rnn
+      transpose_nk(input); // transpose the tensor, get k along the first dimension
+
       CHECK_CUDNN(cudnnRNNForwardTraining(cudnn_handle,
                                           rnn_desc,
                                           seq_length,
@@ -341,33 +367,53 @@ namespace dlib {
                                           hx_desc, hx.device(),
                                           NULL, NULL,
                                           wDesc, w.device(),
-                                          yDescs.data(), out.device(),
+                                          yDescs.data(), y.device(),
                                           hy_desc, hy.device(),
                                           NULL, NULL,
                                           workspace, workspace_size,
                                           training_reserve, training_reserve_size));
 
-      y = out; //cache the last output for future use
-      hx = hy;
-      hy = 0;
+      hx = hy; //update hidden state
+      hy = 0; //reset output hidden to zero
+
+      out = y;
+      transpose_nk(out); // re-transpose to get the batch along the first dimension
 
     }
 
     template<typename SUBNET>
-    void backward(const tensor &gradient_input,
-                  SUBNET &sub,
-                  tensor &params_grad) {
+    void backward(const tensor &gradient_input, // from previous layer
+                  SUBNET &sub,  // closer to data (need to feed stuff to the subnet)
+                  tensor &params_grad)
+    // output, params_grad == grad(dot(computed_output (here our stored y), gradient_input), get_layer_params())
+    {
+
+      // layer<I>(sub).get_gradient_input() += data_gradient_I for all valid I
+      // with data_gradient_I = gradient of layer I wrt gradient_input (dot(layer<I>(sub).get_output(), gradient_input)
+
+      std::cout << gradient_input.num_samples() << " " << gradient_input.k() << " " << gradient_input.nr() << " " << gradient_input.nc() << std::endl;
+      std::cout << sub.get_output().num_samples() << " " << sub.get_output().k() << " " << sub.get_output().nr() << " " << sub.get_output().nc() << std::endl;
+      std::cout << sub.get_gradient_input().num_samples() << " " << sub.get_gradient_input().k() << " " << sub.get_gradient_input().nr() << " " << sub.get_gradient_input().nc() << std::endl;
+
+      resizable_tensor grad_in = transpose_nk(gradient_input);
+      resizable_tensor sub_out = transpose_nk(sub.get_output());
+      resizable_tensor sub_grad_in = transpose_nk(sub.get_gradient_input());
+
+      std::cout << grad_in.num_samples() << " " << grad_in.k() << " " << grad_in.nr() << " " << grad_in.nc() << std::endl;
+      std::cout << sub_out.num_samples() << " " << sub_out.k() << " " << sub_out.nr() << " " << sub_out.nc() << std::endl;
+      std::cout << sub_grad_in.num_samples() << " " << sub_grad_in.k() << " " << sub_grad_in.nr() << " " << sub_grad_in.nc() << std::endl;
+
       CHECK_CUDNN(cudnnRNNBackwardData(cudnn_handle,
                                        rnn_desc,
                                        seq_length,
                                        yDescs.data(), y.device(),
-                                       yDescs.data(), gradient_input.device(),
+                                       yDescs.data(), grad_in.device(),
                                        hy_desc, dhy.device(),
                                        NULL, NULL, //dcy
                                        wDesc, w.device(),
                                        hx_desc, hx.device(),
                                        NULL, NULL, //cx
-                                       xDescs.data(), sub.get_gradient_input().device(),
+                                       xDescs.data(), sub_grad_in.device(),
                                        hx_desc, dhx.device(),
                                        NULL, NULL, //dcx
                                        workspace, workspace_size,
@@ -377,7 +423,7 @@ namespace dlib {
         CHECK_CUDNN(cudnnRNNBackwardWeights(cudnn_handle,
                                             rnn_desc,
                                             seq_length,
-                                            xDescs.data(), sub.get_output().device(),
+                                            xDescs.data(), sub_out.device(),
                                             hx_desc, hx.device(),
                                             yDescs.data(), y.device(),
                                             workspace, workspace_size,
@@ -389,6 +435,12 @@ namespace dlib {
       tt::threshold(dhx, 5.f); //clip upper
       tt::threshold(dhx, -5.f); //clip lower
       dhy = dhx;
+      tt::add(1.0, hx, (float)learning_rate_multiplier, dhx);
+
+//      params_grad = transpose_kn(params_grad); //didn't work
+
+//      sub.get_output() = transpose_kn(sub_out);
+//      sub.get_gradient_input() = transpose_kn(sub_grad_in);
 
     }
 
@@ -474,4 +526,5 @@ namespace dlib {
 //  };
 }
 
+#endif //DLIB_USE_CUDA
 #endif //HOMEAUTOMATION_CUDNN_RNN_H_HPP

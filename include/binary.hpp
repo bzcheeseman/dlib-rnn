@@ -40,35 +40,48 @@
 namespace dlib
 {
 
-  template<size_t N=1, size_t K=1, size_t NR=1, size_t NC=1>
-  struct bin_tensor {
-    std::bitset<N*K*NR*NC> storage;
-
-    size_t num_samples() { return N; }
-    size_t k() { return K; }
-    size_t nr() { return NR; }
-    size_t nc() { return NC; }
-
-    //access operators - note that these are std::bitset::reference so use auto when accessing or create a new struct as a wrapper
-    //gemm kernel
-    //conv kernel - each depth of conv weights 3-tensor has the same weights and bias, N really is just number of samples
-    // - also look at im2col for conv layer and pool layer use darknet stuff - lots of good C code there
-    //activations
-    //binarize from dlib::tensor
-  };
-
-  struct bin_tensor {
-    std::vector<bool> storage;
-
+  class bin_tensor {
+    const size_t size;
     size_t N, K, NR, NC;
+    std::bitset<size> storage;
 
-    size_t num_samples() { return N; }
-    size_t k() { return K; }
-    size_t nr() { return NR; }
-    size_t nc() { return NC; }
+  public:
 
-    bin_tensor(size_t n=1, size_t k=1, size_t nr=1, size_t nc=1): storage(n*k*nr*nc), N(n), K(k) , NR(nr), NC(nc) {}
+    bin_tensor(size_t N, size_t K, size_t NR, size_t NC): size(N*K*NR*NC), N(N), K(K), NR(NR), NC(NC) {}
+
+    bin_tensor operator()(); //slicing returns another bin_tensor
+    //compute bit masks for access operations (like slicing)
   };
+
+//  template<size_t N=1, size_t K=1, size_t NR=1, size_t NC=1>
+//  struct bin_tensor {
+//    std::bitset<N*K*NR*NC> storage;
+//
+//    size_t num_samples() { return N; }
+//    size_t k() { return K; }
+//    size_t nr() { return NR; }
+//    size_t nc() { return NC; }
+//
+//    //access operators - note that these are std::bitset::reference so use auto when accessing or create a new struct as a wrapper
+//    //gemm kernel
+//    //conv kernel - each depth of conv weights 3-tensor has the same weights and bias, N really is just number of samples
+//    // - also look at im2col for conv layer and pool layer use darknet stuff - lots of good C code there
+//    //activations
+//    //binarize from dlib::tensor
+//  };
+//
+//  struct bin_tensor {
+//    std::vector<bool> storage;
+//
+//    size_t N, K, NR, NC;
+//
+//    size_t num_samples() { return N; }
+//    size_t k() { return K; }
+//    size_t nr() { return NR; }
+//    size_t nc() { return NC; }
+//
+//    bin_tensor(size_t n=1, size_t k=1, size_t nr=1, size_t nc=1): storage(n*k*nr*nc), N(n), K(k) , NR(nr), NC(nc) {}
+//  };
 
 
   namespace bin_helper {
